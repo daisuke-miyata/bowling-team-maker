@@ -106,7 +106,7 @@ in the source code.
 Place your player list in a CSV file and run:
 
 ```bash
-python src/team_maker.py
+python team_maker.py
 ```
 
 Generated files:
