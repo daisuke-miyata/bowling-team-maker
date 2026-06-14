@@ -6,7 +6,7 @@ import pyomo.environ as pyo
 
 
 # =========================
-# 設定（ここだけ触ればOK）
+# Configuration (edit only this section)
 # =========================
 
 INPUT_CSV = "players2.csv"
@@ -14,8 +14,8 @@ OUT_ASSIGNMENT = "assignment.csv"
 OUT_TEAMS = "teams.csv"
 
 TEAM_NO_START = 1
-MAX_TEAMS = 10           # ★追加：最大チーム数（=レーン数）
-MAX_PLAYERS = 4 * MAX_TEAMS  # ★追加：最大人数（5人チーム禁止なので40）
+MAX_TEAMS = 10           # ★Added: max number of teams (= number of lanes)
+MAX_PLAYERS = 4 * MAX_TEAMS  # ★Added: max players (no 5-person teams, so 40)
 
 LAMBDA_GENDER = 20.0
 SOLVER = "cbc"
@@ -26,7 +26,7 @@ USE_SYMMETRY_BREAK = True
 
 
 # =========================
-# CSV読み込み：name,gender,score
+# CSV reading: name, gender, score
 # gender: M/F
 # =========================
 
@@ -36,7 +36,7 @@ def read_players_from_csv(path):
         r = csv.DictReader(f)
         req = {"name", "gender", "score"}
         if r.fieldnames is None or not req.issubset(set(r.fieldnames)):
-            raise ValueError(f"CSVヘッダ不足。必要: {req}, 実際: {r.fieldnames}")
+            raise ValueError(f"Missing CSV header. Required: {req}, Actual: {r.fieldnames}")
 
         idx = 0
         for row in r:
@@ -45,11 +45,11 @@ def read_players_from_csv(path):
                 continue
             gender = row["gender"].strip().upper()
             if gender not in ("M", "F"):
-                raise ValueError(f"gender は M/F を想定: {row}")
+                raise ValueError(f"gender must be M or F: {row}")
             try:
                 score = int(float(row["score"]))
             except Exception:
-                raise ValueError(f"score が数値でない: {row}")
+                raise ValueError(f"score is not numeric: {row}")
 
             names[idx] = name
             scores[idx] = score
@@ -57,12 +57,12 @@ def read_players_from_csv(path):
             idx += 1
 
     if idx == 0:
-        raise ValueError("CSVに参加者がいません。")
+        raise ValueError("No participants in CSV.")
     return names, scores, genders
 
 
 # =========================
-# solver別：時間制限などのオプション
+# Solver-specific options: time limit, etc.
 # =========================
 
 def set_solver_options(solver, solver_name, time_limit_sec):
@@ -87,7 +87,7 @@ def set_solver_options(solver, solver_name, time_limit_sec):
 
 
 # =========================
-# 指定チーム数Tで解く（3/4人のみ、5人禁止）
+# Solve for T teams (3/4 persons only, no 5-person teams)
 # =========================
 
 def solve_for_T(names, scores, genders, T,
@@ -97,11 +97,11 @@ def solve_for_T(names, scores, genders, T,
     I = list(scores.keys())
     N = len(I)
 
-    # 3/4人チームだけで成立するTの範囲
+    # Valid range of T for 3/4 person teams only
     if not (math.ceil(N / 4) <= T <= math.floor(N / 3)):
         return None
 
-    # 4人チーム数は N と T から一意：sum(z)=N-3T
+    # Number of 4-person teams is unique given N and T: sum(z)=N-3T
     z_sum = N - 3 * T
     if not (0 <= z_sum <= T):
         return None
@@ -114,11 +114,11 @@ def solve_for_T(names, scores, genders, T,
     m.Teams = pyo.Set(initialize=list(range(T)))
 
     m.x = pyo.Var(m.I, m.Teams, domain=pyo.Binary)
-    m.z = pyo.Var(m.Teams, domain=pyo.Binary)           # 0:3人 1:4人
-    m.S = pyo.Var(m.Teams, domain=pyo.NonNegativeReals) # 合計点
-    m.F = pyo.Var(m.Teams, domain=pyo.NonNegativeReals) # 女性数
-    m.D = pyo.Var(domain=pyo.NonNegativeReals)          # 合計点偏差(max)
-    m.G = pyo.Var(domain=pyo.NonNegativeReals)          # 女性数偏差(max)
+    m.z = pyo.Var(m.Teams, domain=pyo.Binary)           # 0:3 persons, 1:4 persons
+    m.S = pyo.Var(m.Teams, domain=pyo.NonNegativeReals) # total score
+    m.F = pyo.Var(m.Teams, domain=pyo.NonNegativeReals) # female count
+    m.D = pyo.Var(domain=pyo.NonNegativeReals)          # max score deviation
+    m.G = pyo.Var(domain=pyo.NonNegativeReals)          # max gender deviation
 
     m.one_team = pyo.Constraint(m.I, rule=lambda m, i: sum(m.x[i, t] for t in m.Teams) == 1)
     m.team_size = pyo.Constraint(m.Teams, rule=lambda m, t: sum(m.x[i, t] for i in m.I) == 3 + m.z[t])
@@ -132,7 +132,7 @@ def solve_for_T(names, scores, genders, T,
     m.gender_dev_pos = pyo.Constraint(m.Teams, rule=lambda m, t: (m.F[t] - p * (3 + m.z[t])) <= m.G)
     m.gender_dev_neg = pyo.Constraint(m.Teams, rule=lambda m, t: -(m.F[t] - p * (3 + m.z[t])) <= m.G)
 
-    # 対称性破壊（速くする）
+    # Symmetry breaking (for faster solving)
     if USE_SYMMETRY_BREAK:
         top = sorted(I, key=lambda i: scores[i], reverse=True)[:T]
         m.seed = pyo.ConstraintList()
@@ -147,7 +147,7 @@ def solve_for_T(names, scores, genders, T,
 
     solver = pyo.SolverFactory(solver_name)
     if solver is None or not solver.available():
-        raise RuntimeError(f"Solver '{solver_name}' が使えません。cbc/glpk/highs を用意してください。")
+        raise RuntimeError(f"Solver '{solver_name}' is not available. Please install cbc/glpk/highs.")
     set_solver_options(solver, solver_name, time_limit_sec)
     res = solver.solve(m, tee=TEE)
 
@@ -160,7 +160,7 @@ def solve_for_T(names, scores, genders, T,
                 teams[t].append(i)
                 break
         else:
-            return None  # 解が取れてない（タイムアウト等）
+            return None  # Solution not found (timeout, etc.)
 
     summary = []
     for t in range(T):
@@ -181,8 +181,8 @@ def solve_for_T(names, scores, genders, T,
 
 
 # =========================
-# 人数ぶれ対応：成立するTを総当たりして最良を選ぶ
-# ★最大チーム数(MAX_TEAMS)を超えない + 40人超えはエラーで停止
+# Handle participant number variation: brute force all valid T values and select the best
+# ★Do not exceed max number of teams (MAX_TEAMS) + error if over 40 people
 # =========================
 
 def solve_auto_T(names, scores, genders,
@@ -192,10 +192,11 @@ def solve_auto_T(names, scores, genders,
                  max_teams=MAX_TEAMS):
     N = len(scores)
 
-    # ★ここが運営制約：40人超えを明確に止める
+    # ★Operational constraint here: explicitly stop if over 40 people
     if N > 4 * max_teams:
         raise ValueError(
-            f"参加者が {N} 人のため、最大 {max_teams} チーム（=最大 {4*max_teams} 人）では運営できません。"
+            f"With {N} participants, we cannot operate with a maximum of {max_teams} teams "
+            f"(= maximum {4*max_teams} people)."
         )
 
     Tmin = math.ceil(N / 4)
@@ -203,8 +204,8 @@ def solve_auto_T(names, scores, genders,
 
     if Tmin > Tmax:
         raise ValueError(
-            f"N={N} は 3/4人チームのみ & 最大{max_teams}チームでは構成できません。"
-            f"（必要Tは {Tmin} 以上）"
+            f"N={N} cannot be configured with 3/4 person teams only & maximum {max_teams} teams. "
+            f"(Required T is at least {Tmin})"
         )
 
     best = None
@@ -218,7 +219,7 @@ def solve_auto_T(names, scores, genders,
 
 
 # =========================
-# CSV出力
+# CSV export
 # =========================
 
 def export_assignment_csv(path, names, scores, genders, assign, team_offset=TEAM_NO_START):
@@ -264,7 +265,7 @@ def main():
     result = solve_auto_T(names, scores, genders)
 
     if result is None:
-        raise RuntimeError("解が見つかりませんでした（タイムアウト or 制約が厳しすぎる可能性）。")
+        raise RuntimeError("No solution found (possible timeout or constraints too strict).")
 
     print(f"=== Selected T={result['T']} ===")
     print(f"mu={result['mu']:.2f} | female ratio(p)={result['p']:.2f}")
